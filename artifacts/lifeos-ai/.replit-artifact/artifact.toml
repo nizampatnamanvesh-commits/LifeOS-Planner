@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "LifeOS AI"
+description = "A responsive everyday life planner that turns tasks and available time into a realistic schedule, then adapts when plans change."
+version = "1.0.0"
+id = "artifacts/lifeos-ai"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19302
+
+[services.development]
+run = "pnpm --filter @workspace/lifeos-ai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/lifeos-ai", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/lifeos-ai/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19302"
+BASE_PATH = "/"
