@@ -1,9 +1,14 @@
-# [Project name]
+# LifeOS AI
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A daily planning app for managing tasks, availability, schedules, and progress.
 
 ## Run & Operate
 
+- After importing or cloning, run `pnpm install --frozen-lockfile` from the workspace root before starting services.
+- Start the managed `artifacts/lifeos-ai: web` workflow for the app preview. It supplies the `PORT` and `BASE_PATH` variables required by Vite; do not run the frontend without those variables.
+- Start the managed `artifacts/api-server: API Server` workflow for the backend.
+- `pnpm --filter @workspace/lifeos-ai run typecheck` — check the frontend types
+- `pnpm --filter @workspace/lifeos-ai run test:scheduler` — run the scheduler tests
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
