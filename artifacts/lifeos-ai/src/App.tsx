@@ -1,16 +1,35 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Router, Switch, useLocation } from 'wouter';
 import {
   Activity, AlertCircle, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronLeft, CircleHelp, Clock3,
-  Command, Coffee, Compass, ListTodo, Menu, MessageCircle, Pencil, Plus, RefreshCw,
-  Search, Send, Sparkles, Trash2, TrendingUp, X, Zap,
+  Command, Coffee, Compass, ListTodo, Menu, MessageCircle, Moon, Pencil, Plus, RefreshCw,
+  Search, Send, Sparkles, Sun, Trash2, TrendingUp, X, Zap, CalendarDays,
 } from 'lucide-react';
 import { type AppState, type Availability, type Priority, type Task, type UnavailablePeriod, durationLabel, timeLabel, toMinutes } from './lib/models';
 import { generateSchedule, validateAvailability, validateTask } from './lib/planner';
 import { persistAppState } from './lib/persistence';
+import TrackerPage from './pages/TrackerPage';
+import { getGreeting } from './lib/tracker';
 
 const STORE_KEY = 'lifeos-ai-v1';
+const DISPLAY_NAME_KEY = 'lifeos-planner-display-name-v1';
+const THEME_KEY = 'lifeos-planner-theme-v1';
 const categories = ['Work', 'Personal', 'Home', 'Health', 'Learning'];
+type Preferences = { displayName: string; theme: 'light' | 'dark' };
+function readPreferences(): Partial<Preferences> {
+  try {
+    const displayName = localStorage.getItem(DISPLAY_NAME_KEY)?.trim() ?? '';
+    const theme = localStorage.getItem(THEME_KEY);
+    return { displayName, theme: theme === 'light' || theme === 'dark' ? theme : undefined };
+  } catch { return {}; }
+}
+function emitSaveResult(key: string, failed: boolean) {
+  window.dispatchEvent(new CustomEvent('lifeos-storage-status', { detail: { key, failed } }));
+}
+function writeLocalPreference(key: string, value: string) {
+  try { localStorage.setItem(key, value); emitSaveResult(key, false); return true; }
+  catch { emitSaveResult(key, true); return false; }
+}
 
 function seedState(): AppState {
   const tasks: Task[] = [
@@ -59,7 +78,20 @@ type AppData = { state: AppState; setState: (s: AppState) => void; toast: ToastF
 
 function LifeOS() {
   const [state, setState] = useState<AppState>(readState);
-  const [saveFailed, setSaveFailed] = useState(false);
+  const [failedKeys, setFailedKeys] = useState<Set<string>>(new Set());
+  const saveFailed = failedKeys.size > 0;
+  const savedPreferences = useMemo(readPreferences, []);
+  const [displayName, setDisplayName] = useState(typeof savedPreferences.displayName === 'string' ? savedPreferences.displayName.trim() : '');
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (savedPreferences.theme === 'light' || savedPreferences.theme === 'dark') return savedPreferences.theme;
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+  const [hasSavedTheme, setHasSavedTheme] = useState(savedPreferences.theme === 'light' || savedPreferences.theme === 'dark');
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [nameDialog, setNameDialog] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [now, setNow] = useState(() => new Date());
   const [toastText, setToastText] = useState('');
   const [taskDraft, setTaskDraft] = useState<Task | undefined>();
   const [taskDialog, setTaskDialog] = useState(false);
@@ -68,8 +100,41 @@ function LifeOS() {
   const [location] = useLocation();
   const toast: ToastFn = (text) => { setToastText(text); window.setTimeout(() => setToastText(''), 3000); };
   useEffect(() => {
-    setSaveFailed(!persistAppState(STORE_KEY, state));
+    const failed = !persistAppState(STORE_KEY, state);
+    setFailedKeys(current => {
+      const next = new Set(current);
+      if (failed) next.add(STORE_KEY); else next.delete(STORE_KEY);
+      return next;
+    });
+    emitSaveResult(STORE_KEY, failed);
   }, [state]);
+  useLayoutEffect(() => {
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; failed: boolean }>).detail;
+      if (!detail?.key) return;
+      setFailedKeys(current => {
+        const next = new Set(current);
+        if (detail.failed) next.add(detail.key); else next.delete(detail.key);
+        return next;
+      });
+    };
+    window.addEventListener('lifeos-storage-status', listener);
+    return () => window.removeEventListener('lifeos-storage-status', listener);
+  }, []);
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+  useEffect(() => {
+    if (hasSavedTheme) return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const updateTheme = (event: MediaQueryListEvent) => setTheme(event.matches ? 'dark' : 'light');
+    media.addEventListener?.('change', updateTheme);
+    return () => media.removeEventListener?.('change', updateTheme);
+  }, [hasSavedTheme]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => { setMobileOpen(false); }, [location]);
   const update = (next: AppState) => setState(next);
   const showTask = (task?: Task) => { setTaskDraft(task); setTaskDialog(true); };
@@ -86,10 +151,22 @@ function LifeOS() {
     { href: '/availability', label: 'Availability', icon: CalendarClock },
     { href: '/ask', label: 'Ask LifeOS', icon: MessageCircle },
     { href: '/progress', label: 'Progress', icon: TrendingUp },
+    { href: '/tracker', label: '30-day tracker', icon: CalendarDays },
   ];
+  const submitName = (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = nameDraft.trim();
+    if (!trimmed) { setNameError('Add your name to continue.'); return; }
+    setNameError('');
+    writeLocalPreference(DISPLAY_NAME_KEY, trimmed);
+    setDisplayName(trimmed);
+    setNameDialog(false);
+    setNameDraft('');
+  };
+  if (!displayName) return <WelcomeScreen onSubmit={name => { writeLocalPreference(DISPLAY_NAME_KEY, name); setDisplayName(name); }} />;
   return <div className="app-shell">
     <aside className={`sidebar ${state.settings.collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`} aria-label="Main navigation">
-      <div className="brand"><div className="brand-mark"><Command size={18} strokeWidth={2.4} /></div>{!state.settings.collapsed && <div className="brand-name">LifeOS<span style={{ color: '#a995ff' }}> AI</span></div>}</div>
+      <div className="brand"><div className="brand-mark"><Command size={18} strokeWidth={2.4} /></div>{!state.settings.collapsed && <div className="brand-name">LifeOS<span style={{ color: '#c8b9fa' }}> Planner</span></div>}</div>
       <div className="nav-label">Workspace</div>
       <nav>{navItems.map(({ href, label, icon: Icon }) => <Link key={href} href={href} className={`nav-link ${location === href ? 'active' : ''}`} data-testid={`link-nav-${label.toLowerCase().replaceAll(' ', '-')}`} aria-label={label}><Icon size={17} /><span>{label}</span></Link>)}</nav>
       <div className="side-bottom">
@@ -101,7 +178,7 @@ function LifeOS() {
     <div className="main-area">
       <header className="topbar">
         <button className="btn btn-icon" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-nav" style={{ display: 'none' }}><Menu size={18} /></button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><span className="eyebrow" style={{ margin: 0 }}>PERSONAL COMMAND CENTER</span><span className="pill cyan">LOCAL DEMO</span></div>
+        <div className="header-clock"><span className="eyebrow" style={{ margin: 0 }}>YOUR PLANNING SPACE</span><span className="pill cyan">LOCAL</span><time className="clock-time" dateTime={now.toISOString()}>{new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(now)}</time></div>
         <div className="topbar-right">
           <span
             className={`mini-stat save-status ${saveFailed ? 'save-status-error' : ''}`}
@@ -115,7 +192,11 @@ function LifeOS() {
           >
             {saveFailed ? <><AlertCircle size={14} aria-hidden="true" /> Not saved</> : <><span className="save-status-dot" aria-hidden="true" /> Saved on this device</>}
           </span>
-          <div style={{ width: 31, height: 31, display: 'grid', placeItems: 'center', borderRadius: 10, background: '#9c87ff1d', color: '#c3b5ff', fontSize: 11, fontWeight: 700 }}>L</div>
+          <button className="btn btn-icon theme-toggle" onClick={() => { const next = theme === 'dark' ? 'light' : 'dark'; setHasSavedTheme(true); setTheme(next); writeLocalPreference(THEME_KEY, next); }} aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={theme === 'dark' ? 'Light theme' : 'Dark theme'} data-testid="button-theme-toggle">{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
+          <div className="profile-wrap">
+            <button className="profile-button" onClick={() => setProfileOpen(value => !value)} aria-haspopup="menu" aria-expanded={profileOpen} aria-label={`Profile menu for ${displayName}`} data-testid="button-profile-menu"><span className="profile-avatar">{displayName.slice(0, 1).toUpperCase()}</span><span className="profile-name">{displayName}</span></button>
+            {profileOpen && <div className="profile-menu" role="menu" aria-label="Profile options" onKeyDown={event => { if (event.key === 'Escape') setProfileOpen(false); }}><div className="profile-menu-name">{displayName}</div><button role="menuitem" onClick={() => { setNameDraft(displayName); setNameError(''); setNameDialog(true); setProfileOpen(false); }} data-testid="button-change-name">Change name</button><button role="menuitem" onClick={() => { writeLocalPreference(DISPLAY_NAME_KEY, ''); setDisplayName(''); setProfileOpen(false); }} data-testid="button-switch-user">Switch user</button></div>}
+          </div>
         </div>
       </header>
       {saveFailed && <div className="storage-warning" role="alert">
@@ -123,20 +204,49 @@ function LifeOS() {
         <span><strong>LifeOS couldn’t save your changes on this device.</strong> They’re still available during this session, but may be lost if you refresh or close this page.</span>
       </div>}
       <Switch>
-        <Route path="/"><Dashboard data={ctx} openReplan={() => setReplanDialog(true)} /></Route>
+        <Route path="/"><Dashboard data={ctx} openReplan={() => setReplanDialog(true)} displayName={displayName} now={now} /></Route>
         <Route path="/tasks"><TasksPage data={ctx} /></Route>
         <Route path="/availability"><AvailabilityPage data={ctx} /></Route>
         <Route path="/ask"><AskPage data={ctx} /></Route>
         <Route path="/progress"><ProgressPage data={ctx} /></Route>
+        <Route path="/tracker"><TrackerPage /></Route>
         <Route><NotFound /></Route>
       </Switch>
       <nav className="mobile-nav" aria-label="Mobile navigation">{navItems.map(({ href, label, icon: Icon }) => <Link key={href} href={href} className={location === href ? 'active' : ''} data-testid={`mobile-link-${label.toLowerCase().replaceAll(' ', '-')}`}><Icon size={17} /><span>{label === 'Ask LifeOS' ? 'Ask' : label}</span></Link>)}</nav>
     </div>
     {taskDialog && <TaskDialog initial={taskDraft} close={() => setTaskDialog(false)} data={ctx} />}
     {replanDialog && <ReplanDialog close={() => setReplanDialog(false)} onReplan={replan} />}
+    {nameDialog && <div className="overlay" onMouseDown={event => { if (event.target === event.currentTarget) setNameDialog(false); }}><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="change-name-title"><div className="dialog-head"><div><div className="eyebrow">Your local profile</div><h2 id="change-name-title" className="dialog-title">Change your name</h2></div><button className="btn btn-icon" onClick={() => setNameDialog(false)} aria-label="Close name dialog"><X size={16} /></button></div><form onSubmit={submitName}><div className="field"><label htmlFor="change-display-name">Name</label><input id="change-display-name" className="input" value={nameDraft} onChange={event => setNameDraft(event.target.value)} autoFocus maxLength={80} /></div>{nameError && <p className="form-error" role="alert">{nameError}</p>}<div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={() => setNameDialog(false)}>Cancel</button><button type="submit" className="btn btn-primary">Save name</button></div></form></section></div>}
     {!!toastText && <div role="status" className="toast-line" data-testid="status-toast">{toastText}</div>}
-    <style>{`@media(max-width:650px){.topbar>button[aria-label="Open navigation"]{display:inline-flex!important}.topbar{justify-content:flex-start}.topbar-right{margin-left:auto}.topbar .eyebrow{display:none}}`}</style>
+    <style>{`@media(max-width:650px){.topbar>button[aria-label="Open navigation"]{display:inline-flex!important}.topbar{justify-content:flex-start}.topbar-right{margin-left:auto}.topbar .header-clock>.eyebrow{display:none}}`}</style>
   </div>;
+}
+
+function WelcomeScreen({ onSubmit }: { onSubmit: (name: string) => void }) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const value = name.trim();
+    if (!value) { setError('Please add your name to continue.'); return; }
+    setError('');
+    onSubmit(value);
+  };
+  return <main className="welcome-screen">
+    <div className="welcome-panel">
+      <div className="welcome-brand"><span className="welcome-mark"><Command size={20} /></span><span>LifeOS <b>Planner</b></span></div>
+      <div className="welcome-orbit" aria-hidden="true"><span /><span /><span /></div>
+      <div className="eyebrow">A more considered day starts here</div>
+      <h1>Welcome to LifeOS Planner</h1>
+      <p>Your day, intelligently organized.</p>
+      <form onSubmit={submit} noValidate>
+        <div className="field"><label htmlFor="welcome-name">Your name</label><input id="welcome-name" className="input" value={name} onChange={event => { setName(event.target.value); setError(''); }} autoComplete="given-name" maxLength={80} autoFocus aria-describedby={error ? 'welcome-name-error' : undefined} data-testid="input-welcome-name" /></div>
+        {error && <p className="form-error" id="welcome-name-error" role="alert">{error}</p>}
+        <button className="btn btn-primary welcome-continue" type="submit" data-testid="button-welcome-continue">Continue <ArrowRight size={15} /></button>
+      </form>
+      <div className="welcome-privacy">Your name and planning details stay in this browser.</div>
+    </div>
+  </main>;
 }
 
 function App() {
@@ -147,7 +257,7 @@ function PageHead({ eyebrow, title, subtitle, children }: { eyebrow: string; tit
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1 className="page-title">{title}</h1><p className="page-subtitle">{subtitle}</p></div>{children && <div className="page-heading-actions">{children}</div>}</div>;
 }
 
-function Dashboard({ data, openReplan }: { data: AppData; openReplan: () => void }) {
+function Dashboard({ data, openReplan, displayName, now }: { data: AppData; openReplan: () => void; displayName: string; now: Date }) {
   const { state } = data;
   const open = state.tasks.filter(t => !t.completed);
   const completed = state.tasks.filter(t => t.completed);
@@ -158,11 +268,10 @@ function Dashboard({ data, openReplan }: { data: AppData; openReplan: () => void
   const blockedMinutes = state.availability.unavailablePeriods.reduce((sum, p) => sum + toMinutes(p.endTime) - toMinutes(p.startTime), 0);
   const availableMinutes = Math.max(0, toMinutes(state.availability.endTime) - toMinutes(state.availability.startTime) - blockedMinutes - state.availability.breakMinutes);
   const timelineItems = [...(state.schedule?.items ?? []), ...state.availability.unavailablePeriods.map(period => ({ id: `unavailable-${period.id}`, title: period.label, startTime: period.startTime, endTime: period.endTime, kind: 'unavailable' as const, status: 'planned' as const, taskId: undefined, priority: undefined }))].sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
-  const date = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
-  const titleName = new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(new Date()).toLowerCase().includes('pm') ? 'Good afternoon' : 'Good morning';
+   const date = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(now);
   const highPriority = open.filter(t => t.priority === 'high').sort((a,b) => a.dueTime?.localeCompare(b.dueTime ?? '') ?? 0);
   return <main className="content">
-    <PageHead eyebrow={date} title={`${titleName}, let's make today work.`} subtitle="A realistic plan for the things that matter — with room for real life.">
+     <PageHead eyebrow={date} title={`${getGreeting(now)}, ${displayName}.`} subtitle="Welcome to LifeOS Planner · Let’s make today productive, one task at a time.">
       <button className="btn btn-primary" onClick={() => data.replan(0)} data-testid="button-generate-day"><Sparkles size={15} /> Generate my day</button>
       <button className="btn btn-secondary" onClick={openReplan} data-testid="button-replan-day"><RefreshCw size={14} /> Replan my day</button>
     </PageHead>
