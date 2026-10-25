@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Router, Switch, useLocation } from 'wouter';
 import {
-  Activity, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronLeft, CircleHelp, Clock3,
+  Activity, AlertCircle, ArrowRight, CalendarClock, Check, CheckCircle2, ChevronLeft, CircleHelp, Clock3,
   Command, Coffee, Compass, ListTodo, Menu, MessageCircle, Pencil, Plus, RefreshCw,
   Search, Send, Sparkles, Trash2, TrendingUp, X, Zap,
 } from 'lucide-react';
 import { type AppState, type Availability, type Priority, type Task, type UnavailablePeriod, durationLabel, timeLabel, toMinutes } from './lib/models';
 import { generateSchedule, validateAvailability, validateTask } from './lib/planner';
+import { persistAppState } from './lib/persistence';
 
 const STORE_KEY = 'lifeos-ai-v1';
 const categories = ['Work', 'Personal', 'Home', 'Health', 'Learning'];
@@ -58,6 +59,7 @@ type AppData = { state: AppState; setState: (s: AppState) => void; toast: ToastF
 
 function LifeOS() {
   const [state, setState] = useState<AppState>(readState);
+  const [saveFailed, setSaveFailed] = useState(false);
   const [toastText, setToastText] = useState('');
   const [taskDraft, setTaskDraft] = useState<Task | undefined>();
   const [taskDialog, setTaskDialog] = useState(false);
@@ -65,7 +67,9 @@ function LifeOS() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [location] = useLocation();
   const toast: ToastFn = (text) => { setToastText(text); window.setTimeout(() => setToastText(''), 3000); };
-  useEffect(() => { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }, [state]);
+  useEffect(() => {
+    setSaveFailed(!persistAppState(STORE_KEY, state));
+  }, [state]);
   useEffect(() => { setMobileOpen(false); }, [location]);
   const update = (next: AppState) => setState(next);
   const showTask = (task?: Task) => { setTaskDraft(task); setTaskDialog(true); };
@@ -98,8 +102,26 @@ function LifeOS() {
       <header className="topbar">
         <button className="btn btn-icon" onClick={() => setMobileOpen(true)} aria-label="Open navigation" data-testid="button-open-nav" style={{ display: 'none' }}><Menu size={18} /></button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><span className="eyebrow" style={{ margin: 0 }}>PERSONAL COMMAND CENTER</span><span className="pill cyan">LOCAL DEMO</span></div>
-        <div className="topbar-right"><span className="mini-stat" style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span style={{ width: 7, height: 7, borderRadius: 8, background: '#72c8a0' }} /> Saved on this device</span><div style={{ width: 31, height: 31, display: 'grid', placeItems: 'center', borderRadius: 10, background: '#9c87ff1d', color: '#c3b5ff', fontSize: 11, fontWeight: 700 }}>L</div></div>
+        <div className="topbar-right">
+          <span
+            className={`mini-stat save-status ${saveFailed ? 'save-status-error' : ''}`}
+            role={saveFailed ? 'alert' : 'status'}
+            aria-label={saveFailed
+              ? "Couldn't save changes. Your latest changes may be lost when you close or refresh this page."
+              : 'Saved on this device'}
+            title={saveFailed
+              ? "Couldn't save changes. Your latest changes may be lost when you close or refresh this page."
+              : 'Saved on this device'}
+          >
+            {saveFailed ? <><AlertCircle size={14} aria-hidden="true" /> Not saved</> : <><span className="save-status-dot" aria-hidden="true" /> Saved on this device</>}
+          </span>
+          <div style={{ width: 31, height: 31, display: 'grid', placeItems: 'center', borderRadius: 10, background: '#9c87ff1d', color: '#c3b5ff', fontSize: 11, fontWeight: 700 }}>L</div>
+        </div>
       </header>
+      {saveFailed && <div className="storage-warning" role="alert">
+        <AlertCircle size={16} aria-hidden="true" />
+        <span><strong>LifeOS couldn’t save your changes on this device.</strong> They’re still available during this session, but may be lost if you refresh or close this page.</span>
+      </div>}
       <Switch>
         <Route path="/"><Dashboard data={ctx} openReplan={() => setReplanDialog(true)} /></Route>
         <Route path="/tasks"><TasksPage data={ctx} /></Route>
